@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Client Display</title>
+  <link rel="stylesheet" href="/static/css/styles.css">
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      height: 100%;
+      width: 100%;
+      background: black;
+    }
+    .banner {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 30px;
+      background: #222;
+      color: white;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 20px;
+      font-family: sans-serif;
+      font-size: 14px;
+      z-index: 9999;
+    }
+    .zone {
+      position: absolute;
+      border: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="banner">
+    <div id="deviceId">Device: <span id="deviceText">--</span></div>
+    <div id="status">Connecting...</div>
+    <div id="clock">--:--:--</div>
+  </div>
+
+  <script>
+    // ==== Remote logging helpers (so we can see logs over SSH) ====
+    let deviceIdForLogs = null;
+    const sessionId = Math.random().toString(36).slice(2, 10);
+
+    function remoteLog(level, ...args) {
+      try {
+        const message = args.map(a => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ');
+        fetch('http://192.168.25.115:8080/client-log', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ level, message, deviceId: deviceIdForLogs || null, sessionId })
+        }).catch(() => {});
+      } catch (e) { /* ignore logging errors */ }
+    }
+
+    ['log', 'warn', 'error'].forEach(level => {
+      const orig = console[level].bind(console);
+      console[level] = (...args) => {
+        remoteLog(level, ...args);
+        orig(...args);
+      };
+    });
+    window.onerror = (msg, src, line, col) => {
+      remoteLog('error', `Uncaught: ${msg} @ ${src}:${line}:${col}`);
+    };
+
+    // ==== Basic layout state ====
+    const zones = {};
+
+    // ==== Server selection (works from file:// and persists) ====
+    const DEFAULT_SERVER = '192.168.25.115:8080'; // change if needed
+    const qs = new URLSearchParams(location.search);
+    const serverFromQuery = qs.get('server'); // file:///.../client-template.html?server=IP:PORT
+    if (serverFromQuery) {
+      try { localStorage.setItem('server', serverFromQuery); } catch (e) {}
+    }
+    const server = serverFromQuery || (function(){
+      try { return localStorage.getItem('server'); } catch (e) { return null; }
+    })() || DEFAULT_SERVER;
+
+    // ==== Banner helpers ====
+    function showOfflineInfo() {
+      // When loaded via file:// we can't know the device IP/hostname from JS
+      // Show our configured server hint instead
+      document.getElementById('status').textContent = 'Disconnected';
+      document.getElementById('deviceText').textContent = server || 'No network';
+    }
+    function showServerDeviceId(id) {
+      document.getElementById('deviceText').textContent = id;
+    }
+
+    console.log('Initializing banner with offline info');
+    showOfflineInfo();
+
+    function applyLayout(layout) {
+      // Clear old zones
+      Object.values(zones).forEach(iframe => iframe.remove());
+      Object.keys(zones).forEach(key => delete zones[key]);
+
+      // Normalize incoming layout into an array of zone configs
+      let zoneList = [];
+
+      if (!layout || typeof layout !== 'object') {
+        console.warn('applyLayout: invalid layout payload');
+        return;
+      }
+
+      if (Array.isArray(layout)) {
+        // Rare, but support direct array
+        zoneList = layout;
+        console.log(`applyLayout: using direct array schema (${zoneList.length} zones)`);
+      } else if (Array.isArray(layout.zones)) {
+        // Server schema: { zones: [ { content,left,top,width,height,zIndex } ] }
+        zoneList = layout.zones;
+        console.log(`applyLayout: using layout.zones schema (${zoneList.length} zones)`);
+      } else {
+        // Legacy schema: { zone1: {...}, zone2: {...}, ... }
+        for (let i = 1; i <= 24; i++) {
+          const z = layout[`zone${i}`];
+          if (z) zoneList.push(z);
+        }
+        // Fallback: include any object-like entries that look like zones
+        if (zoneList.length === 0) {
+          Object.values(layout).forEach(v => {
+            if (v && typeof v === 'object' && (v.src || v.content || v.top || v.left)) {
+              zoneList.push(v);
+            }
+          });
+        }
+        console.log(`applyLayout: using zoneN/heuristic schema (${zoneList.length} zones)`);
+      }
+
+      // Render zones
+      zoneList.forEach((cfg, idx) => {
+        const iframe = document.createElement('iframe');
+        iframe.classList.add('zone');
+        iframe.style.top = cfg.top || '0';
+        iframe.style.left = cfg.left || '0';
+        iframe.style.width = cfg.width || '100%';
+        iframe.style.height = cfg.height || '100%';
+        iframe.src = (cfg.src || cfg.content || '').toString();
+        iframe.style.zIndex = (cfg.zIndex != null ? cfg.zIndex : (idx + 1)).toString();
+        zones[`zone${idx + 1}`] = iframe;
+        document.body.appendChild(iframe);
+      });
+
+      console.log(`applyLayout: rendered ${zoneList.length} zone(s)`);
+    }
+
+    function updateClock() {
+      const now = new Date();
+      const dd  = String(now.getDate()).padStart(2, '0');
+      const mon = now.toLocaleString('en-US', { month: 'short' }); // e.g., "Aug"
+      const yy  = String(now.getFullYear()).slice(-2);             // e.g., "25"
+      const time = now.toLocaleTimeString();                        // keep locale time
+      document.getElementById('clock').textContent = `${dd} ${mon} ${yy} ${time}`;
+    }
+
+    setInterval(updateClock, 1000);
+    updateClock();
+
+    // ==== Display info helpers ====
+    function gatherDisplayInfo() {
+      const sw = (typeof screen !== 'undefined' && screen.width) ? screen.width : null;
+      const sh = (typeof screen !== 'undefined' && screen.height) ? screen.height : null;
+      const aw = (typeof screen !== 'undefined' && screen.availWidth) ? screen.availWidth : null;
+      const ah = (typeof screen !== 'undefined' && screen.availHeight) ? screen.availHeight : null;
+      const iw = (typeof window !== 'undefined' && window.innerWidth) ? window.innerWidth : null;
+      const ih = (typeof window !== 'undefined' && window.innerHeight) ? window.innerHeight : null;
+      const dpr = (typeof window !== 'undefined' && window.devicePixelRatio) ? window.devicePixelRatio : 1;
+      const effW = (sw && dpr) ? Math.round(sw * dpr) : null;
+      const effH = (sh && dpr) ? Math.round(sh * dpr) : null;
+      const orientation = (typeof screen !== 'undefined' && screen.orientation && screen.orientation.type) ? screen.orientation.type : null;
+      const colorDepth = (typeof screen !== 'undefined' && typeof screen.colorDepth === 'number') ? screen.colorDepth : null;
+      return {
+        css: { width: sw, height: sh },
+        effective: { width: effW, height: effH, dpr },
+        viewport: { width: iw, height: ih },
+        avail: { width: aw, height: ah },
+        orientation,
+        colorDepth,
+        userAgent: navigator.userAgent
+      };
+    }
+
+    function sendClientInfo() {
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      const payload = { type: 'clientInfo', display: gatherDisplayInfo() };
+      try {
+        ws.send(JSON.stringify(payload));
+        console.log('Sent clientInfo');
+      } catch (e) {
+        console.error('clientInfo send failed', e);
+      }
+    }
+
+    // ==== WebSocket setup with auto-reconnect ====
+    let ws;
+    let reconnectTimer = null;
+    let retryMs = 5000;
+    const maxRetryMs = 30000;
+
+    function scheduleReconnect() {
+      if (reconnectTimer) return;
+      document.getElementById('status').textContent = `Reconnecting in ${Math.round(retryMs/1000)}s…`;
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        connect();
+      }, retryMs);
+      retryMs = Math.min(Math.floor(retryMs * 1.7), maxRetryMs);
+    }
+
+    function connect() {
+      const wsUrl = `ws://${server}`;
+      console.log('Attempting WebSocket connection to', wsUrl);
+
+      try {
+        ws = new WebSocket(wsUrl);
+      } catch (e) {
+        console.error('WebSocket constructor failed for', wsUrl, e.message);
+        showOfflineInfo();
+        scheduleReconnect();
+        return;
+      }
+
+      ws.onopen = () => {
+        console.log('WebSocket opened');
+        if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+        retryMs = 5000;
+        document.getElementById('status').textContent = 'Connected';
+        ws.send(JSON.stringify({ type: 'registerRequest' }));
+        // send display info immediately after opening
+        sendClientInfo();
+      };
+
+      ws.onmessage = (event) => {
+        console.log('WebSocket message received:', event.data);
+        const msg = JSON.parse(event.data);
+        if (msg.type === 'deviceInfo') {
+          showServerDeviceId(msg.deviceId);
+          deviceIdForLogs = msg.deviceId;
+          document.getElementById('status').textContent = 'Ready';
+          // send display info now that we know device ID
+          sendClientInfo();
+        } else if (msg.type === 'layout') {
+          console.log('Processing layout message');
+          document.getElementById('status').textContent = 'Layout received';
+          applyLayout(msg.layout);
+        }
+      };
+
+      ws.onclose = (event) => {
+        console.log('WebSocket closed', event.code, event.reason || '');
+        showOfflineInfo();
+        scheduleReconnect();
+      };
+
+      ws.onerror = (err) => {
+        console.error('WebSocket error', err);
+        showOfflineInfo();
+        scheduleReconnect();
+      };
+    }
+
+    // Send updated display info on resize (debounced)
+    let __resizeTimer;
+    window.addEventListener('resize', () => {
+      clearTimeout(__resizeTimer);
+      __resizeTimer = setTimeout(sendClientInfo, 500);
+    });
+
+    // kick things off (after showOfflineInfo + clock init)
+    connect();
+  </script>
+</body>
+</html>
