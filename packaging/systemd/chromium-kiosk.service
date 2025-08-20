@@ -5,10 +5,21 @@ After=network.target
 [Service]
 Type=simple
 User=kiosk
-Environment=DISPLAY=:99
-ExecStart=/bin/sh -c 'Xvfb :99 -screen 0 1920x1080x24 & sleep 1; DISPLAY=:99 /usr/bin/chromium-browser --no-first-run --kiosk --incognito --user-data-dir=/var/lib/kiosk http://localhost:8080'
-Restart=always
+# Set display and HOME so Chromium and crashpad use the kiosk data dir instead of /home/kiosk
+Environment=HOME=/var/lib/kiosk
+# Ensure we do not inherit an invalid DBUS address from the service manager
+UnsetEnvironment=DBUS_SESSION_BUS_ADDRESS
+
+# Ensure kiosk dirs and crashpad DB exist and are owned by kiosk
+ExecStartPre=/bin/mkdir -p /var/lib/kiosk /var/lib/kiosk/.local/share/applications /var/lib/kiosk/.config/chrome/Crash\ Reports
+ExecStartPre=/bin/chown -R kiosk:kiosk /var/lib/kiosk
+
+# Start Chromium under a transient DBus session; also start Xvfb before launching the browser.
+# Use dbus-run-session to provide a valid DBUS_SESSION_BUS_ADDRESS for Chromium.
+ExecStart=/usr/bin/dbus-run-session -- /bin/sh -c 'Xvfb :99 -screen 0 1920x1080x24 -ac > /var/log/Xvfb-:99.log 2>&1 & sleep 1; export DISPLAY=":99"; exec /usr/bin/chromium-browser --no-first-run --kiosk --incognito --user-data-dir=/var/lib/kiosk --disable-gpu --disable-software-rasterizer --disable-dev-shm-usage --no-sandbox --disable-breakpad http://localhost:8080'
+Restart=on-failure
 RestartSec=5
+KillMode=process
 
 [Install]
 WantedBy=graphical.target

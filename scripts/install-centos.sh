@@ -84,11 +84,17 @@ if [ "$OPT_KIOSK" -eq 1 ]; then
       echo "warning: kiosk package $pkg failed to install, continuing" >&2
     fi
   done
-  # create a non-login kiosk user to run the browser
+  # ensure kiosk user and home exist and are owned correctly
+  echo "Ensuring kiosk user and home exist..."
   if ! id -u kiosk >/dev/null 2>&1; then
-    echo "Creating kiosk user..."
-    $SUDO useradd --system --no-create-home --shell /sbin/nologin kiosk || true
+    echo "Creating kiosk user with home /var/lib/kiosk..."
+    $SUDO useradd --system --home-dir /var/lib/kiosk --create-home --shell /sbin/nologin kiosk || true
+  else
+    echo "kiosk user already exists; setting home to /var/lib/kiosk"
+    $SUDO usermod -d /var/lib/kiosk kiosk >/dev/null 2>&1 || true
   fi
+  $SUDO mkdir -p /var/lib/kiosk
+  $SUDO chown -R kiosk:kiosk /var/lib/kiosk || true
 fi
 
 echo "Attempting to install distro nodejs (preferred)..."
@@ -178,9 +184,18 @@ After=network.target
 [Service]
 Type=simple
 User=kiosk
-Environment=DISPLAY=:99
-ExecStart=/bin/sh -c 'Xvfb :99 -screen 0 1920x1080x24 & sleep 1; DISPLAY=:99 /usr/bin/chromium-browser --no-first-run --kiosk --incognito --user-data-dir=/var/lib/kiosk http://localhost:8080'
-Restart=always
+# Set HOME so Chromium and crashpad use the kiosk data dir instead of /home/kiosk
+Environment=HOME=/var/lib/kiosk
+# Ensure we do not inherit an invalid DBUS address from the service manager
+UnsetEnvironment=DBUS_SESSION_BUS_ADDRESS
+
+# Ensure kiosk dirs and crashpad DB exist and are owned by kiosk
+ExecStartPre=/bin/mkdir -p /var/lib/kiosk /var/lib/kiosk/.local/share/applications /var/lib/kiosk/.config/chrome/Crash\ Reports
+ExecStartPre=/bin/chown -R kiosk:kiosk /var/lib/kiosk
+
+# Start Chromium under a transient DBus session; also start Xvfb before launching the browser.
+ExecStart=/usr/bin/dbus-run-session -- /bin/sh -c 'Xvfb :99 -screen 0 1920x1080x24 -ac > /var/log/Xvfb-:99.log 2>&1 & sleep 1; export DISPLAY=":99"; exec /usr/bin/chromium-browser --no-first-run --kiosk --incognito --user-data-dir=/var/lib/kiosk --disable-gpu --disable-software-rasterizer --disable-dev-shm-usage --no-sandbox --disable-breakpad http://localhost:8080'
+Restart=on-failure
 RestartSec=5
 
 [Install]
