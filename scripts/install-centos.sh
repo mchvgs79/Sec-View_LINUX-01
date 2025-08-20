@@ -21,6 +21,7 @@ OPT_KIOSK=0
 if [ "${3:-}" = "--kiosk" ]; then
   OPT_KIOSK=1
 fi
+CONTROLLER_ARG="${4:-}"
 DEST="/opt/sec-viewer-agent"
 
 if [ -z "$REPO_URL" ]; then
@@ -210,10 +211,23 @@ EOF
   $SUDO systemctl enable --now layout-agent.service || true
   # ensure sec-viewer-agent uses the shared state dir as well
   $SUDO mkdir -p /etc/systemd/system/sec-viewer-agent.service.d
-  $SUDO tee /etc/systemd/system/sec-viewer-agent.service.d/home.conf > /dev/null <<'EOF'
+  if [ -n "${CONTROLLER_ARG}" ]; then
+    $SUDO tee /etc/systemd/system/sec-viewer-agent.service.d/override.conf > /dev/null <<EOF
+[Service]
+Environment=HOME=/var/lib/sec-viewer
+Environment=CONTROLLER_URLS=${CONTROLLER_ARG}
+EOF
+    $SUDO mkdir -p /etc/systemd/system/layout-agent.service.d
+    $SUDO tee /etc/systemd/system/layout-agent.service.d/override.conf > /dev/null <<EOF
+[Service]
+Environment=CONTROLLER_URLS=${CONTROLLER_ARG}
+EOF
+  else
+    $SUDO tee /etc/systemd/system/sec-viewer-agent.service.d/home.conf > /dev/null <<'EOF'
 [Service]
 Environment=HOME=/var/lib/sec-viewer
 EOF
+  fi
   $SUDO systemctl daemon-reload
   $SUDO systemctl restart sec-viewer-agent.service layout-agent.service || true
 fi
