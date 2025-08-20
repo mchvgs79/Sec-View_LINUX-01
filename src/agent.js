@@ -111,7 +111,7 @@ async function discoverViaDhcpOption(option, leaseFile) {
 const STATE_DIR = process.env.AGENT_STATE_DIR || path.join(os.homedir(), '.sec-viewer');
 const FP_FILE = path.join(STATE_DIR, 'fingerprint.json');
 const CLIENT_FILE = path.join(STATE_DIR, 'client.json');
-const HEARTBEAT_MS = Number(process.env.HEARTBEAT || 30000);
+let HEARTBEAT_MS = Number(process.env.HEARTBEAT || 30000);
 const SCREEN_W   = Number(process.env.AGENT_SCREEN_W || 1920);
 const SCREEN_H   = Number(process.env.AGENT_SCREEN_H || 1080);
 const SCREEN_DPR = Number(process.env.AGENT_SCREEN_DPR || 1);
@@ -138,7 +138,9 @@ const SCREEN_ROT = Number(process.env.AGENT_SCREEN_ROT || 0); // 0|90|180|270
     console.log(`[agent] found existing client (${clientId}), resuming heartbeats...`);
     // don't assume controller; try env list and pick first that works during heartbeat
     activeController = envControllers[0];
-    return heartbeatLoop(clientId, token);
+  // pull server config (if available) before starting heartbeats
+  try { await fetchServerConfig(activeController, token); } catch (e) { /* ignore */ }
+  return heartbeatLoop(clientId, token);
   }
 
   const fingerprint = await getOrCreateFingerprint();
@@ -161,6 +163,8 @@ const SCREEN_ROT = Number(process.env.AGENT_SCREEN_ROT || 0); // 0|90|180|270
     console.warn('[agent] could not open viewer:', e.message);
   }
 
+  // fetch server config (may update HEARTBEAT_MS) then begin heartbeats
+  try { await fetchServerConfig(activeController, bootstrapToken); } catch (e) { /* ignore */ }
   return heartbeatLoop(clientId, bootstrapToken);
 })().catch(err => {
   console.error('[agent] fatal error:', err?.message || err);
@@ -233,7 +237,31 @@ async function heartbeatLoop(clientId, token) {
         return relaunch(); // back to enroll flow
       }
     }
+    // before sleeping, periodically refresh server config
+    try {
+      const controller = activeController || getControllersFromEnv()[0];
+      await fetchServerConfig(controller, token);
+    } catch (e) {
+      // ignore config fetch errors
+    }
     await sleep(HEARTBEAT_MS);
+  }
+}
+
+// fetch /config from the server and apply any server-side settings
+async function fetchServerConfig(controller, token) {
+  if (!controller) return;
+  try {
+    const { data } = await axios.get(`${controller}/config`, {
+      headers: { Authorization: `Bearer ${token}` },
+      timeout: 5000
+    });
+    if (data && typeof data.heartbeatMs === 'number') {
+      HEARTBEAT_MS = Number(data.heartbeatMs);
+      console.log(`[agent] updated HEARTBEAT_MS=${HEARTBEAT_MS} from server config`);
+    }
+  } catch (e) {
+    // don't propagate
   }
 }
 

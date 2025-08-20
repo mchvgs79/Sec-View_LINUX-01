@@ -83,6 +83,11 @@ if [ "$OPT_KIOSK" -eq 1 ]; then
       echo "warning: kiosk package $pkg failed to install, continuing" >&2
     fi
   done
+  # create a non-login kiosk user to run the browser
+  if ! id -u kiosk >/dev/null 2>&1; then
+    echo "Creating kiosk user..."
+    $SUDO useradd --system --no-create-home --shell /sbin/nologin kiosk || true
+  fi
 fi
 
 echo "Attempting to install distro nodejs (preferred)..."
@@ -156,4 +161,48 @@ EOF
 $SUDO systemctl daemon-reload
 $SUDO systemctl enable --now sec-viewer-agent.service || true
 
-echo "Install complete. To re-run install steps manually, inspect the script and logs." 
+if [ "$OPT_KIOSK" -eq 1 ]; then
+  echo "Installing kiosk systemd units..."
+
+  # chromium kiosk using Xvfb :99 and running as 'kiosk'
+  $SUDO tee /etc/systemd/system/chromium-kiosk.service > /dev/null <<'EOF'
+[Unit]
+Description=Chromium Kiosk Renderer (Xvfb)
+After=network.target
+
+[Service]
+Type=simple
+User=kiosk
+Environment=DISPLAY=:99
+ExecStart=/bin/sh -c 'Xvfb :99 -screen 0 1920x1080x24 & sleep 1; DISPLAY=:99 /usr/bin/chromium --no-first-run --kiosk --incognito http://localhost:8080'
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=graphical.target
+EOF
+
+  # layout-agent service (runs the agent from the installed DEST)
+  $SUDO tee /etc/systemd/system/layout-agent.service > /dev/null <<EOF
+[Unit]
+Description=Layout Client Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=${DEST}
+ExecStart=/usr/bin/node ${DEST}/src/agent.js
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  $SUDO systemctl daemon-reload
+  $SUDO systemctl enable --now chromium-kiosk.service || true
+  $SUDO systemctl enable --now layout-agent.service || true
+fi
+
+echo "Install complete. To re-run install steps manually, inspect the script and logs."
