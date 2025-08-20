@@ -95,6 +95,11 @@ if [ "$OPT_KIOSK" -eq 1 ]; then
   fi
   $SUDO mkdir -p /var/lib/kiosk
   $SUDO chown -R kiosk:kiosk /var/lib/kiosk || true
+  # Rebuild font cache so Chromium finds fonts (fc-cache is a command, not a package)
+  if command -v fc-cache >/dev/null 2>&1; then
+    $SUDO fc-cache -f -v || true
+    $SUDO -u kiosk fc-cache -f -v || true
+  fi
 fi
 
 echo "Attempting to install distro nodejs (preferred)..."
@@ -131,7 +136,9 @@ echo "npm version: $(npm -v 2>/dev/null || echo '(not installed)')"
 
 echo "Cloning repository to $DEST"
 $SUDO rm -rf "$DEST"
-if ! $SUDO git clone --depth 1 --branch "$BRANCH" "$REPO_URL" "$DEST"; then
+$SUDO mkdir -p "$(dirname "$DEST")"
+# Clone from a stable working directory to avoid "Unable to read current working directory" errors
+if ! (cd /tmp && $SUDO git clone --depth 1 --branch "$BRANCH" "$REPO_URL" "$DEST"); then
   echo "git clone failed; aborting." >&2
   exit 1
 fi

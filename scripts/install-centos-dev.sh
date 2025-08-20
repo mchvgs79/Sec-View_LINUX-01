@@ -38,7 +38,7 @@ fi
 
 echo "Installing development packages (x11vnc, dbus-x11, font utilities)..."
 sudo $PKG_MGR install -y epel-release >/dev/null 2>&1 || true
-sudo $PKG_MGR install -y x11vnc dbus-x11 fontconfig fc-cache || true
+sudo $PKG_MGR install -y x11vnc dbus-x11 fontconfig || true
 
 # Ensure kiosk home exists and permissions are sane
 sudo mkdir -p /var/lib/kiosk
@@ -92,3 +92,20 @@ Security:
 - Prefer tunneling (SSH) rather than opening firewall ports. If you must expose the port locally, set VNC_PASS before running this script.
 
 EOF
+
+# If base installer failed to clone the repo, try cloning here (from /tmp) so dev tools can use it
+if [ ! -d /opt/sec-viewer-agent ]; then
+  echo "Base installer did not create /opt/sec-viewer-agent; attempting to clone for dev testing..."
+  rm -rf /opt/sec-viewer-agent || true
+  if ! (cd /tmp && sudo git clone --depth 1 --branch ${2:-main} ${1:-https://github.com/mchvgs79/Sec-View_LINUX-01} /opt/sec-viewer-agent); then
+    echo "Dev-time clone also failed; continue using manual steps." >&2
+  else
+    sudo chown -R root:root /opt/sec-viewer-agent || true
+  fi
+fi
+
+# Rebuild font caches if fc-cache is available
+if command -v fc-cache >/dev/null 2>&1; then
+  sudo fc-cache -f -v || true
+  sudo -u kiosk fc-cache -f -v || true
+fi
