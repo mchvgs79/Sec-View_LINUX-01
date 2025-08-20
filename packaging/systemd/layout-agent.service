@@ -5,10 +5,11 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=/opt/sec-viewer/agents/linux-client
-ExecStart=/usr/bin/true
+WorkingDirectory=/opt/sec-viewer-agent
+ExecStart=/usr/bin/node /opt/sec-viewer-agent/src/agent.js
 Restart=always
 RestartSec=5
+Environment=HOME=/var/lib/sec-viewer
 
 [Install]
 WantedBy=multi-user.target

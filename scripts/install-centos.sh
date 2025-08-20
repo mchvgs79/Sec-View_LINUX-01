@@ -165,6 +165,10 @@ if [ "$OPT_KIOSK" -eq 1 ]; then
   echo "Installing kiosk systemd units..."
 
   # chromium kiosk using Xvfb :99 and running as 'kiosk'
+  # ensure shared state dir for agent
+  $SUDO mkdir -p /var/lib/sec-viewer
+  $SUDO chown root:root /var/lib/sec-viewer
+
   $SUDO tee /etc/systemd/system/chromium-kiosk.service > /dev/null <<'EOF'
 [Unit]
 Description=Chromium Kiosk Renderer (Xvfb)
@@ -174,7 +178,7 @@ After=network.target
 Type=simple
 User=kiosk
 Environment=DISPLAY=:99
-ExecStart=/bin/sh -c 'Xvfb :99 -screen 0 1920x1080x24 & sleep 1; DISPLAY=:99 /usr/bin/chromium --no-first-run --kiosk --incognito http://localhost:8080'
+ExecStart=/bin/sh -c 'Xvfb :99 -screen 0 1920x1080x24 & sleep 1; DISPLAY=:99 /usr/bin/chromium-browser --no-first-run --kiosk --incognito --user-data-dir=/var/lib/kiosk http://localhost:8080'
 Restart=always
 RestartSec=5
 
@@ -195,6 +199,7 @@ WorkingDirectory=${DEST}
 ExecStart=/usr/bin/node ${DEST}/src/agent.js
 Restart=always
 RestartSec=5
+Environment=HOME=/var/lib/sec-viewer
 
 [Install]
 WantedBy=multi-user.target
@@ -203,6 +208,14 @@ EOF
   $SUDO systemctl daemon-reload
   $SUDO systemctl enable --now chromium-kiosk.service || true
   $SUDO systemctl enable --now layout-agent.service || true
+  # ensure sec-viewer-agent uses the shared state dir as well
+  $SUDO mkdir -p /etc/systemd/system/sec-viewer-agent.service.d
+  $SUDO tee /etc/systemd/system/sec-viewer-agent.service.d/home.conf > /dev/null <<'EOF'
+[Service]
+Environment=HOME=/var/lib/sec-viewer
+EOF
+  $SUDO systemctl daemon-reload
+  $SUDO systemctl restart sec-viewer-agent.service layout-agent.service || true
 fi
 
 echo "Install complete. To re-run install steps manually, inspect the script and logs."

@@ -1,10 +1,12 @@
 ﻿[Unit]
-Description=Chromium Kiosk Renderer
-After=graphical.target
+Description=Chromium Kiosk Renderer (Xvfb)
+After=network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/true
+User=kiosk
+Environment=DISPLAY=:99
+ExecStart=/bin/sh -c 'Xvfb :99 -screen 0 1920x1080x24 & sleep 1; DISPLAY=:99 /usr/bin/chromium-browser --no-first-run --kiosk --incognito --user-data-dir=/var/lib/kiosk http://localhost:8080'
 Restart=always
 RestartSec=5
 
