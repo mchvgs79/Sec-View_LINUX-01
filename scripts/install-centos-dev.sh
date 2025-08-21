@@ -15,8 +15,22 @@ set -euo pipefail
 SCRIPTDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INSTALLER="$SCRIPTDIR/install-centos.sh"
 
+# If the installer in this repo copy isn't executable, try common fallback locations
+TRIED_INSTALLERS=("$INSTALLER")
 if [ ! -x "$INSTALLER" ]; then
-  echo "Warning: $INSTALLER not found or not executable. Make sure you run this from the cloned repo's scripts/ directory." >&2
+  # common fallback when users copy the repo to /tmp for VM provisioning
+  FALLBACK1="/tmp/Sec-View_LINUX-01/scripts/install-centos.sh"
+  FALLBACK2="/tmp/$(basename "${PWD}")/scripts/install-centos.sh"
+  TRIED_INSTALLERS+=("$FALLBACK1" "$FALLBACK2")
+  if [ -x "$FALLBACK1" ]; then
+    INSTALLER="$FALLBACK1"
+  elif [ -x "$FALLBACK2" ]; then
+    INSTALLER="$FALLBACK2"
+  else
+    echo "Warning: none of the installer candidates are executable. Tried:" >&2
+    for p in "${TRIED_INSTALLERS[@]}"; do echo "  - $p" >&2; done
+    echo "Make sure you run this from the cloned repo's scripts/ directory or place the repo under /tmp as expected for some VM workflows." >&2
+  fi
 fi
 
 # Run the normal installer first (pass-through args)
@@ -38,7 +52,7 @@ fi
 
 echo "Installing development packages (x11vnc, dbus-x11, font utilities)..."
 sudo $PKG_MGR install -y epel-release >/dev/null 2>&1 || true
-sudo $PKG_MGR install -y x11vnc dbus-x11 fontconfig || true
+sudo $PKG_MGR install -y x11vnc dbus-x11 fontconfig >/dev/null 2>&1 || true
 
 # Ensure kiosk home exists and permissions are sane
 sudo mkdir -p /var/lib/kiosk
